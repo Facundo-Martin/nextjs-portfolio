@@ -1,0 +1,501 @@
+import { ArticleLayout } from '@/components/ArticleLayout'
+import guitarLessonsNearMe from './guitar-lessons-near-me.png'
+
+export const article = {
+  author: 'Facundo Martin',
+  date: '2024-10-20',
+  title: 'JSON as a Temporary Database: How We Scaled Data Prototyping',
+  description:
+    'How we used JSON as a flexible, temporary database solution when faced with fragmented datasets, uncertain SEO strategy, and evolving product specifications—a pragmatic approach that drove real results.',
+}
+
+export const metadata = {
+  title: article.title,
+  description: article.description,
+}
+
+export default (props) => <ArticleLayout article={article} {...props} />
+
+<Image src={guitarLessonsNearMe} alt="" />
+
+Every startup faces the same impossible paradox: you need users to gather meaningful data, but you need data to make informed decisions about what will attract users. This fundamental tension creates a strategic challenge that every growing company must navigate.
+
+At Til, our guitar lesson marketplace, we hit this exact wall after our initial product launch. **We had built a solid platform with video lessons, scheduling tools, and payment processing—but our user acquisition was still heavily reliant on word of mouth and direct outreach.**
+
+To break through this ceiling, our CEO decided we should invest in SEO as a sustainable growth channel. The strategy? Generate thousands of location-based landing pages targeting searches like "guitar lessons in [City]" to capture organic traffic from potential students across the country.
+
+I was tasked with leading this project. The goal was conceptually simple but technically nuanced: **collect location data, build a flexible system for managing it, and create a pipeline that would power our SEO strategy**. The challenge was finding a balance between moving quickly and building something that could adapt to our rapidly evolving needs.
+
+## The Problem: Data Fragmentation and Evolving Requirements
+
+The project presented two distinct technical challenges:
+
+1. **Fragmented Data Sources**
+
+   We needed comprehensive information about US cities including names, states, populations, coordinates, and time zones. No single dataset contained all the information we required—some had accurate population figures but lacked coordinates, while others had detailed geographic information but missing administrative data.
+
+   To make matters more complex, we needed to match cities across datasets that sometimes used different naming conventions or abbreviations.
+
+2. **Evolving Data Requirements**
+
+   Since this was our first major SEO initiative, our understanding of what data we needed was constantly evolving. The marketing team was still refining their strategy based on keyword research, and we were uncertain about which city attributes would be most valuable for targeting or page generation.
+
+   Creating a rigid database schema upfront would inevitably lead to migrations, backfills, and potential errors as requirements changed. We needed a more flexible approach that could adapt to our learning process.
+
+## Proposed Solution: JSON as a Flexible Database
+
+After discussing options with our CTO, we decided that using JSON files as a temporary database would provide the perfect balance of structure and flexibility. This approach would give us:
+
+- **Adaptability**: We could easily modify our data structure as requirements evolved without complex migrations
+- **Type safety**: With TypeScript, we could still maintain strong typing despite the flexible format
+- **Simplicity**: The entire team could easily understand and modify the data if needed
+- **Version control**: Changes to our dataset could be tracked in git alongside our code
+- **Performance**: For our dataset size (thousands, not millions of records), JSON files would be perfectly efficient
+
+This wasn't a permanent solution—eventually we'd migrate to a proper database once our data model stabilized—but it was ideal for our prototyping phase.
+
+Our implementation plan consisted of five steps:
+
+1. Create a `/data-aggregation` directory to store all source files and output
+2. Read and parse data from multiple source files
+3. Define a TypeScript interface for our desired output
+4. Merge and transform the datasets into our unified format
+5. Write the consolidated data to a new `cities.json` file
+
+## Implementation
+
+### Reading Files in Node.js
+
+Node.js offers several approaches for reading files, each with different performance characteristics:
+
+- `fs.readFile`: Reads the entire file into memory
+- `fs.createReadStream`: Processes the file in chunks, ideal for large files
+- Synchronous versions like `fs.readFileSync`: Blocks execution until completed
+
+For our prototype, I opted for the Promise-based `fs.readFile` from the `fs/promises` module, which provided a clean async/await syntax:
+
+```javascript
+import path from 'path'
+import fs from 'fs/promises'
+
+const OPENDATA_CITIES_PATH = path.resolve(
+  __dirname,
+  `opendata-all-us-cities.json`,
+)
+const DB_CITIES_PATH = path.resolve(__dirname, `cities.json`)
+
+async function generateUSCitiesData() {
+  try {
+    // Read data from source files
+    const [opendataCitiesData, dbCitiesData] = await Promise.all([
+      fs.readFile(OPENDATA_CITIES_PATH, { encoding: 'utf8' }),
+      fs.readFile(DB_CITIES_PATH, { encoding: 'utf8' }),
+    ])
+
+    // Parse JSON data
+    const opendataCities = JSON.parse(opendataCitiesData)
+    const dbCities = JSON.parse(dbCitiesData)
+
+    console.log('Read JSON files successfully:', {
+      opendataCitiesCount: opendataCities.length,
+      dbCitiesCount: dbCities.length,
+    })
+
+    // Further processing will happen here...
+  } catch (error) {
+    throw new Error(`Error reading city data: ${error}`)
+  }
+}
+```
+
+By using `Promise.all`, we could read both files concurrently, optimizing our script's performance.
+
+### Defining a Type-Safe Data Structure
+
+The next step was defining a TypeScript interface that would represent our unified city data structure:
+
+```typescript
+export type City = {
+  type: 'City'
+  geoname_id: string // Unique identifier from OpenData
+  name: string // City name
+  state: string // Full state name
+  country: string // Country name
+  slug: string // URL-friendly version of city name
+  timezone: string // Timezone identifier
+  latitude: number // Geographic coordinates
+  longitude: number
+  population: number // Population count
+  country_code: string // ISO country code
+  state_id: number // State identifier from internal dataset
+  state_code: string // State abbreviation
+  nearbyLessons: Place[] | null // Related lessons (null if not yet queried)
+}
+```
+
+This structure combined elements from both datasets and added our own fields like `slug` for URL generation and `nearbyLessons` for storing related content.
+
+### Merging and Transforming Datasets
+
+The core of our implementation was merging data from different sources into a unified structure:
+
+```javascript
+async function generateUSCitiesData() {
+  try {
+    // ... file reading code from previous example ...
+
+    const citiesData: City[] = [];
+
+    // Use a Set for efficient lookups
+    const existingCityIds = new Set(dbCities.map((x) => x.geoname_id));
+
+    for (const city of opendataCities) {
+      // Skip if we've already processed this city
+      if (existingCityIds.has(city.geoname_id)) {
+        const existingCity = dbCities.find((x) => x.geoname_id === city.geoname_id);
+        if (existingCity) {
+          citiesData.push(existingCity);
+        }
+        continue;
+      }
+
+      // Find matching city in our other dataset by name and location
+      const matchingCity = dbCities.find(
+        (x) =>
+          x.name.toLowerCase() === city.name.toLowerCase() &&
+          x.country_code === city.country_code &&
+          x.state_code.toLowerCase() === city.admin1_code.toLowerCase(),
+      );
+
+      if (!matchingCity) continue; // Skip if no match found
+
+      // Create merged city record with our desired structure
+      const mergedCity: City = {
+        type: 'City',
+        geoname_id: city.geoname_id,
+        name: city.name,
+        state: matchingCity.state_name,
+        country: city.country,
+        slug: getCitySlug(city),
+        timezone: city.timezone,
+        latitude: city.coordinates.lat,
+        longitude: city.coordinates.lon,
+        population: city.population,
+        country_code: city.country_code,
+        state_code: city.admin1_code,
+        state_id: matchingCity.state_id,
+        nearbyLessons: null, // Will be populated later
+      };
+
+      citiesData.push(mergedCity);
+    }
+
+    // Sort cities by population (largest first)
+    const sortedCities = citiesData.sort((a, b) => b.population - a.population);
+
+    console.log(`Generated data for ${sortedCities.length} cities`);
+
+    // Further processing will happen here...
+  } catch (error) {
+    throw new Error(`Error merging city data: ${error}`);
+  }
+}
+```
+
+Some key optimization techniques I used:
+
+- Creating a `Set` of existing IDs for O(1) lookups instead of repeated array searches
+- Using `toLowerCase()` to ensure case-insensitive matching between datasets
+- Implementing early `continue` statements to skip unnecessary processing
+- Sorting by population to prioritize major cities
+
+### Writing the Consolidated Data
+
+With our merged dataset prepared, the final step was writing it to a new JSON file:
+
+```javascript
+// ... continuing from previous example ...
+
+// Write the merged data to our output file
+await fs.writeFile(
+  ALL_CITIES_PATH,
+  JSON.stringify(sortedCities, null, 2), // Pretty-print with 2-space indentation
+)
+
+console.log(
+  `Successfully wrote ${sortedCities.length} cities to ${ALL_CITIES_PATH}`,
+)
+```
+
+We used the same `fs/promises` module for writing, with pretty-printing enabled to make the file human-readable during development.
+
+## Releasing Cities to Production
+
+The second part of our project was selecting which cities to "release" for page generation. We needed to:
+
+1. Filter cities based on population and available lesson content
+2. Query an external API to find nearby lessons for each city
+3. Create a subset of the most promising cities for our initial release
+
+Here's how we implemented this logic:
+
+```javascript
+async function generateReleasedCitiesData() {
+  try {
+    // Read the full cities dataset
+    const citiesData = JSON.parse(
+      await fs.readFile(ALL_CITIES_PATH, { encoding: 'utf8' }),
+    )
+
+    // Track which cities are already released
+    const alreadyReleasedIds = new Set(
+      JSON.parse(
+        await fs.readFile(RELEASED_CITIES_PATH, { encoding: 'utf8' }),
+      ).map((city) => city.geoname_id),
+    )
+
+    // Start with currently released cities
+    const releasedCities = [...alreadyReleasedCities]
+
+    // Filter for new candidate cities (not too large, not already released)
+    const candidateCities = citiesData
+      .filter((city) => {
+        return (
+          city.population < 500000 && !alreadyReleasedIds.has(city.geoname_id)
+        )
+      })
+      .sort((a, b) => b.population - a.population)
+
+    // Process cities sequentially
+    for (const city of candidateCities) {
+      // Limit the total number of cities we process
+      if (releasedCities.length >= 1000) break
+
+      // Find nearby lessons using external API
+      const nearbyLessons = await getNearbyLessons({
+        locationName: city.name,
+        coordinates: {
+          latitude: city.latitude,
+          longitude: city.longitude,
+        },
+      })
+
+      // Only include cities with sufficient nearby content
+      if (nearbyLessons.length >= 2) {
+        const cityWithLessons = {
+          ...city,
+          nearbyLessons,
+        }
+        releasedCities.push(cityWithLessons)
+      }
+    }
+
+    // Write the final list of released cities
+    await fs.writeFile(
+      RELEASED_CITIES_PATH,
+      JSON.stringify(releasedCities, null, 2),
+    )
+
+    console.log(`Released ${releasedCities.length} cities for page generation`)
+  } catch (error) {
+    throw new Error(`Error generating released cities: ${error}`)
+  }
+}
+```
+
+## Refining the City Release Process
+
+The initial implementation worked, but as with any rapid prototype, there was room for improvement. After getting a working version, I focused on optimizing our approach:
+
+```javascript
+import pMap from 'p-map'
+
+async function generateReleasedCitiesData() {
+  try {
+    // Load existing data
+    const citiesData = JSON.parse(
+      await fs.readFile(ALL_CITIES_PATH, { encoding: 'utf8' }),
+    )
+
+    const existingReleasedCities = JSON.parse(
+      await fs.readFile(RELEASED_CITIES_PATH, { encoding: 'utf8' }),
+    )
+
+    // Define clear thresholds as constants instead of magic numbers
+    const MAX_POPULATION_THRESHOLD = 500000
+    const MIN_NEARBY_LESSONS = 2
+    const MAX_CITIES_TO_PROCESS = 1500
+    const MAX_CITIES_TO_RELEASE = 1000
+    const CONCURRENCY_LIMIT = 5
+
+    // Track existing cities with a Set for O(1) lookups
+    const releasedCityIds = new Set(
+      existingReleasedCities.map((c) => c.geoname_id),
+    )
+
+    // Filter candidates more efficiently
+    const candidateCities = citiesData
+      .filter(
+        (city) =>
+          city.population < MAX_POPULATION_THRESHOLD &&
+          !releasedCityIds.has(city.geoname_id),
+      )
+      .sort((a, b) => b.population - a.population)
+      .slice(0, MAX_CITIES_TO_PROCESS)
+
+    console.log(`Processing ${candidateCities.length} candidate cities`)
+
+    // Process cities in parallel with controlled concurrency
+    const processedCities = await pMap(
+      candidateCities,
+      async (city) => {
+        const nearbyLessons = await getNearbyLessons({
+          locationName: city.name,
+          coordinates: { latitude: city.latitude, longitude: city.longitude },
+        })
+
+        if (nearbyLessons.length >= MIN_NEARBY_LESSONS) {
+          return { ...city, nearbyLessons }
+        }
+        return null
+      },
+      { concurrency: CONCURRENCY_LIMIT },
+    )
+
+    // Combine existing and new cities
+    const newReleasedCities = processedCities
+      .filter(Boolean)
+      .slice(0, MAX_CITIES_TO_RELEASE - existingReleasedCities.length)
+
+    const releasedCities = [...existingReleasedCities, ...newReleasedCities]
+
+    console.log(
+      `Adding ${newReleasedCities.length} new cities for a total of ${releasedCities.length}`,
+    )
+
+    // Write the final dataset
+    await fs.writeFile(
+      RELEASED_CITIES_PATH,
+      JSON.stringify(releasedCities, null, 2),
+    )
+
+    return releasedCities
+  } catch (error) {
+    throw new Error(`Error generating released cities: ${error}`)
+  }
+}
+```
+
+Some key optimization techniques I used:
+
+- Replaced magic numbers with named constants for better readability and maintainability
+- Implemented parallel processing with `pMap` to handle multiple API requests concurrently
+- Added more detailed logging to track progress during long-running operations
+- Used Sets for efficient lookups when checking if a city was already processed
+
+## What I'd Do Differently Next Time
+
+While the solution worked well for our immediate needs, there are several improvements I'd make if implementing a similar system today:
+
+### Use a Single Source of Truth with Status Flags
+
+Instead of creating separate files for all cities and released cities, I'd maintain a single dataset with status flags:
+
+```typescript
+type City = {
+  // ...existing fields
+  status: 'pending' | 'released' | 'excluded'
+  releaseDate?: string
+}
+```
+
+This approach would eliminate the need to maintain two separate files that could potentially get out of sync, while still allowing us to filter cities based on their status.
+
+### Leverage Node.js Streams for Large Files
+
+Although our files weren't large enough to cause performance issues, a more scalable approach would be to use Node.js streams for processing:
+
+```javascript
+import { createReadStream } from 'fs'
+import { createInterface } from 'readline'
+
+// Read and process file line by line
+const processLargeFile = async (filePath) => {
+  const fileStream = createReadStream(filePath)
+  const rl = createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  })
+
+  const processedData = []
+  for await (const line of rl) {
+    // Process each line
+    const item = JSON.parse(line)
+    // Transform data...
+    processedData.push(transformedItem)
+  }
+
+  return processedData
+}
+```
+
+This streaming approach would handle files of any size without loading everything into memory at once.
+
+### Implement an Automated Release Pipeline
+
+Rather than manually triggering city releases, I would build an automated pipeline:
+
+```javascript
+// In a scheduled task function
+export async function scheduledCityRelease() {
+  // Load current cities data
+  const citiesData = await loadCitiesData()
+
+  // Find eligible cities
+  const eligibleCities = citiesData
+    .filter((city) => city.status === 'pending')
+    .slice(0, BATCH_SIZE)
+
+  // Process in parallel
+  const processedCities = await pMap(
+    eligibleCities,
+    async (city) => {
+      const nearbyLessons = await getNearbyLessons(city)
+      if (hasSufficientNearbyContent(nearbyLessons)) {
+        return {
+          ...city,
+          status: 'released',
+          releaseDate: new Date().toISOString(),
+          nearbyLessons,
+        }
+      }
+      return {
+        ...city,
+        status: 'excluded',
+        nearbyLessons,
+      }
+    },
+    { concurrency: CONCURRENCY_LIMIT },
+  )
+
+  // Update cities data and save
+  await updateCitiesData(processedCities)
+
+  // Trigger page generation for newly released cities
+  await generatePages(processedCities.filter((c) => c.status === 'released'))
+
+  return processedCities
+}
+```
+
+This automated approach would eliminate manual intervention and ensure consistent, regular releases.
+
+## Conclusion
+
+The JSON-as-a-database approach proved to be the right solution for our needs at that stage. It gave us the flexibility to evolve our data model while maintaining type safety, versioning, and developer productivity.
+
+What began as a simple data aggregation project taught me valuable lessons about balancing flexibility with structure, especially in early-stage products where requirements evolve rapidly. Sometimes, the "textbook" solution isn't the right one for your specific context and constraints.
+
+This project reinforced my understanding that technical decisions are rarely just about the code itself—they're about finding the right balance between immediate needs and future flexibility. By prioritizing adaptability, we built a system that could evolve alongside our understanding of what data mattered most for our SEO strategy.
+
+In the months that followed, our approach paid off as we saw organic traffic increase by 40%, validating both the technical implementation and the broader strategy.

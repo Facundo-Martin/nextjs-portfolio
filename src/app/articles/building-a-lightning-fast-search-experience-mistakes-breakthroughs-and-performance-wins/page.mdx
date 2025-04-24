@@ -1,0 +1,343 @@
+import { ArticleLayout } from '@/components/ArticleLayout'
+
+export const article = {
+  author: 'Facundo Martin',
+  date: '2025-01-10',
+  title:
+    'Building a Lightning-Fast Search Experience: Mistakes, Breakthroughs, and Performance Wins',
+  description:
+    'A technical deep-dive into key architectural decisions and performance breakthroughs that enabled building a lightning-fast TikTok-inspired search interface through strategic caching, client-side filtering, and video optimization techniques.',
+}
+
+export const metadata = {
+  title: article.title,
+  description: article.description,
+}
+
+export default (props) => <ArticleLayout article={article} {...props} />
+
+When tasked with rearchitecting Til's search page, I knew we needed a complete overhaul rather than incremental improvements. Our existing page was taking over 11 seconds to load—a conversion killer by any standard. The goal was ambitious but clear: **create a lightning-fast, TikTok-inspired browsing experience for guitar lessons**.
+
+This project ultimately cut our load time by 66% and dramatically improved user engagement, but the journey was filled with unexpected roadblocks and valuable lessons that have shaped how I approach performance optimization today.
+
+## The Challenge
+
+With this project being a complete overhaul and performance playing a key role, I knew that focusing on nailing the architecture would be crucial to our success.
+
+If I'm being honest, my main concern was twofold:
+
+- **Server-side uncertainty**: With the recent shift toward server components in React and Next.js's push for server-side rendering, it wasn't immediately clear to me how to best leverage these new patterns for our search page. The documentation and examples I found were mostly for basic use cases - nothing that addressed the complexity of a video-heavy, filter-intensive interface like ours.
+- **Cohesive adoption**: Developing an isolated feature is one thing, but building a cohesive system where all the parts interact seamlessly is a whole different ball game. I wasn't sure if leaning too heavily into server-side features would end up hindering development or creating conflicts with our client-side needs.
+
+I was leading this project end-to-end, from architecture decisions to deployment, so if I wanted to ship this feature on time, I better figure this out ASAP.
+
+## Architecture Planning
+
+When approaching this challenge, I needed to solve several interconnected problems:
+
+1. **Initial data loading** had to be near-instantaneous
+2. **URL parameter handling** needed to be robust yet elegant
+3. **Filter logic** had to operate without introducing latency
+4. **Video content** needed to load efficiently despite its size
+5. **State persistence** was essential for sharing and navigation
+
+Having worked on many projects with similar requirements, I developed an initial approach:
+
+1. **Server-side rendering** via Next.js to fetch initial data with near-zero perceived latency
+2. **Full route caching** to eliminate database queries for repeat visitors
+3. **End-to-end type-safe URL parameters** (TBD) - hoping to integrate nuqs, which I'd had success with in past projects
+4. **Data filtering** (TBD) - needed to determine client vs. server approach
+5. **Video streaming optimization** - leveraging Mux, which we'd already used successfully elsewhere
+
+Let me walk through how we implemented each piece—and where I got stuck along the way.
+
+### Finding Architectural Inspiration
+
+When tackling ambitious projects, I've learned that **a blend of independent thinking and learning from others usually provides the best outcomes**. So my workflow usually consists of writing down my own hypothesis, then seeking validation before diving in.
+
+Why? Well, in my more junior years, it wasn't uncommon for me to design a plan and dive right in without getting much external validation or seeing what solutions others had already implemented. That approach led to more than a few rabbit holes and reinvented wheels. These days, I try to be more deliberate about research before committing to an implementation path.
+
+Back to the project, initial searches for "building a filtering system with Next.js" yielded surprisingly generic results. But a Twitter search led me to Aurora Scharff's excellent article on [Managing Advanced Search Param Filtering in the Next.js App Router](https://aurorascharff.no/posts/managing-advanced-search-param-filtering-next-app-router/).
+
+[](https://pbs.twimg.com/media/GHtyjuCWMAA9xPm?format=jpg&name=medium)
+
+This finding was critical—we had already mastered Mux for video streaming and leveraged Next.js's full route cache in other projects. The URL parameter handling was the missing piece for a cohesive solution.
+
+### Architectural Adaptation
+
+With the latest trends pushing functionality to server-side rendering, and nuqs being compatible with server components, conventional wisdom suggested filtering data at the database level. After all, that's typically the most efficient approach for large datasets.
+
+However, our catalog consisted of only about 100 classes. Adding database roundtrips for each filter change would introduce unnecessary latency. Instead, I opted for a hybrid approach:
+
+1. **Server-side rendering** with full route caching for the initial data load
+2. **Client-side filtering** for instant UI feedback without server roundtrips
+3. **Robust URL parameter management** for state persistence and shareability
+
+## Building the Solution
+
+Now that I had a clear architectural direction, it was time to implement each component of our solution.
+
+### Implementing Type-Safe URL Parameters
+
+Following Aurora's approach, I implemented a streamlined version of nuqs for our search parameters:
+
+```tsx
+'server-only'
+
+import {
+  parseAsString,
+  createSearchParamsCache,
+  parseAsArrayOf,
+  parseAsInteger,
+} from 'nuqs/server'
+
+// Parser configuration for our key parameters
+export const searchParsers = {
+  // Basic search query
+  q: parseAsString.withDefault(''),
+
+  // Array of music styles (jazz, rock, blues, etc.)
+  styles: parseAsArrayOf(parseAsString).withDefault([]),
+
+  // Maximum price filter without a default
+  maxPrice: parseAsInteger,
+}
+
+// Create a server-side cache for the search parameters
+export const searchParamsCache = createSearchParamsCache(searchParsers)
+```
+
+Then, I created a custom React hook for components to easily access and update these URL parameters:
+
+```tsx
+'use client'
+
+import { useQueryStates } from 'nuqs'
+import { searchParsers } from '../utils/nuqs-parser'
+
+export function useSearch() {
+  return useQueryStates(searchParsers, {
+    shallow: false,
+  })
+}
+```
+
+This simplified approach provided several advantages:
+
+- **Type safety** across the entire application
+- **Shareable URLs** that preserved filter state
+- **Consistent defaults** for core parameters
+- **Serialization handling** for complex types like arrays
+
+### Server-Side Rendering & Caching
+
+For the initial data load, we leveraged Next.js's full route cache to eliminate database queries for repeat visitors. This approach pre-renders the page with all lessons at build time and serves the cached version to users:
+
+```tsx
+// In page.tsx
+export const revalidate = 172800 // 48 hours
+
+async function SearchPage() {
+  // This data fetch happens at build time and is cached
+  const classes = await fetchAllClasses()
+
+  return <ClientSideSearch initialClasses={classes} />
+}
+```
+
+With a 48-hour revalidation period and the ability to trigger manual cache invalidation when new lessons were published, we ensured content stayed fresh without sacrificing performance.
+
+### Video Streaming Optimization
+
+We had been using Mux for video streaming since day one, which gave us a solid foundation for the search page redesign. Mux's player component provided several important features for performance:
+
+- **Chunked loading**: Videos are broken into segments to stream efficiently
+- **Adaptive bitrate**: Quality adjusts based on network conditions
+- **Lazy loading**: Videos can load only when needed
+
+For our TikTok-inspired interface, the ability to lazy-load videos was crucial to prevent excessive network requests. Their component allowed us to defer video initialization until the component entered the viewport.
+
+### Client-Side Filtering
+
+With our data loaded upfront and cached, implementing client-side filtering was relatively straightforward. Most filters were handled with simple JavaScript operations on our cached dataset.
+
+For our search query functionality, we continued using Fuse.js, which was already implemented in our codebase. This fuzzy search library was treated differently from other filters, allowing for more forgiving text matching that could handle typos and partial matches.
+
+This approach meant that when users adjusted filters, the UI responded instantly without any network requests or server round-trips—creating that "snappy" experience we were aiming for.
+
+## Mistakes and Learnings
+
+Despite our careful planning and architecture, we encountered several unexpected challenges that taught me valuable lessons about optimization and debugging. These issues weren't obvious at first glance, and solving them required thinking outside the typical performance playbook.
+
+### Performance Bottlenecks
+
+Despite implementing all these optimizations, our initial performance tests showed disappointing results. The page was still taking over 11 seconds to fully load. I was perplexed—we had optimized every aspect I could think of:
+
+- Reduced server load with caching
+- Minimized client-side data transfer
+- Implemented lazy loading for videos
+- Parallelized backend queries
+
+### A Beginner's Approach to Network Debugging
+
+When debugging complex performance issues, we often bring our own biases that can blind us to the real problems. After trying numerous optimizations with minimal improvement, I decided to take a step back and adopt a beginner's mindset.
+
+This meant approaching the problem without assumptions about where the bottleneck might be. I went back to basics and focused on understanding our page's network activity using Chrome DevTools.
+
+I watched several tutorials on performance analysis and particularly focused on understanding the waterfall chart in the Network tab. The key metrics I was tracking were:
+
+- **DOMContentLoaded**: 3.09s (when the HTML is fully loaded)
+- **Page Load**: 11.34s (when all resources are fully loaded)
+
+These numbers were far from our target of 2-3 seconds for full interactivity.
+
+### Eureka! The Hidden Culprit
+
+Then I discovered the "Block Requests" feature in Chrome DevTools—which became the turning point in my investigation.
+
+I began systematically blocking different network requests to isolate their impact. What I discovered was shocking:
+
+![](https://i.imgur.com/waterfall.png)
+
+Our navbar component was silently making **four duplicate calls** to the `/trpc/public.allClasses` endpoint—effectively fetching our entire lesson catalog multiple times on every page load!
+
+When I blocked just these redundant requests, our metrics improved dramatically:
+
+- DOMContentLoaded: dropped from 3.09s to 1.96s
+- Page Load: dropped from 11.34s to 3.84s (a 66% improvement!)
+
+The culprit? Our navigation component was prefetching the current page (the search page), which was triggering the data fetches we had already handled in our page component. A simple fix to our prefetching logic solved the issue.
+
+This experience taught me that sometimes the bottleneck isn't in your new code but in how it interacts with existing systems. Having a methodical approach to performance debugging is just as important as knowing the latest optimization techniques.
+
+### Further Video Optimization
+
+Even with our core performance issues resolved, we needed to further optimize video loading. Despite Mux's excellent lazy-loading capabilities, having dozens of video players ready to initialize was still causing network congestion.
+
+During a review, our CEO asked a simple but insightful question: "How does TikTok do it? Do they load all the videos at once?"
+
+This prompted me to inspect TikTok's explore page more carefully. I discovered they don't even render video players in the DOM until a user hovers over a thumbnail—they show optimized static images instead.
+
+Taking inspiration from this approach, we implemented a similar strategy:
+
+```tsx
+function VideoCard({ lesson }) {
+  const [isHovering, setIsHovering] = useState(false)
+
+  return (
+    <div
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+    >
+      {isHovering ? (
+        <MuxPlayer
+          streamType="on-demand"
+          playbackId={lesson.playbackId}
+          metadata={{
+            video_title: lesson.title,
+            player_name: 'Til Search Player',
+          }}
+        />
+      ) : (
+        <img
+          src={`https://image.mux.com/${lesson.playbackId}/thumbnail.jpg`}
+          alt={lesson.title}
+          loading="lazy"
+        />
+      )}
+    </div>
+  )
+}
+```
+
+This approach dramatically reduced initial network load and created a much smoother browsing experience. Sometimes the best solutions come from looking at how larger companies have solved similar problems.
+
+### The Mysterious Echo
+
+During testing, I encountered a strange issue—when hovering over thumbnails, I could hear an echo, as if the video's audio track was playing twice.
+
+I was already facing some challenges with the Mux integration, so I decided to build a simple demo app with hardcoded production data to isolate the problem. I shared this with Mux support along with a link to our preview feature.
+
+Their response surprised me: "We can see two player elements in the DOM when you hover."
+
+After diving into our component, I realized we were conditionally hiding the video player with CSS rather than removing it from the DOM:
+
+```tsx
+// 🚩 Problematic code
+function ResponsiveVideoCard({ lesson }) {
+  return (
+    <>
+      <div className="hidden md:block">
+        <VideoCard lesson={lesson} />
+      </div>
+      <div className="block md:hidden">
+        <MobileVideoCard lesson={lesson} />
+      </div>
+    </>
+  )
+}
+```
+
+When users hovered on desktop, both the desktop and (hidden) mobile players were initializing and playing simultaneously! The CSS was hiding the element visually, but both video players remained active in the DOM. Switching to conditional rendering fixed the issue:
+
+```tsx
+// ✅ Fixed code
+function ResponsiveVideoCard({ lesson }) {
+  const isMobile = useMediaQuery('(max-width: 768px)')
+
+  return (
+    <>
+      {!isMobile ? (
+        <VideoCard lesson={lesson} />
+      ) : (
+        <MobileVideoCard lesson={lesson} />
+      )}
+    </>
+  )
+}
+```
+
+This was a valuable reminder that CSS-based responsive design techniques like `hidden` classes don't actually remove elements from the DOM. For complex components like video players, it's often better to use JavaScript to conditionally render elements rather than simply hiding them with CSS.
+
+## Key Learnings
+
+This project changed my approach to performance optimization and architecture in several fundamental ways:
+
+1. **Adopt a beginner's mindset when debugging**
+
+   When you're stuck on a complex performance issue, take a step back and approach the problem without assumptions. Sometimes the most powerful debugging technique is to clear your mind and look at the problem with fresh eyes.
+
+2. **Look beyond your new code for bottlenecks**
+
+   Our biggest performance issue wasn't in the new search architecture but in how it interacted with existing components. Performance problems often exist at the boundaries between systems.
+
+3. **Have a methodical approach to performance analysis**
+
+   Using Chrome DevTools' "Block Requests" feature strategically was more valuable than a dozen optimizations based on assumptions. When tackling performance, a systematic approach beats guesswork every time.
+
+4. **Learn from your competitors**
+
+   TikTok's approach to video loading provided the blueprint for our most effective UX optimization. Sometimes the solution to your problem has already been solved by others in your industry.
+
+5. **Don't confuse hiding with removing**
+
+   CSS-based hiding of complex components can lead to subtle bugs that are difficult to trace. For resource-intensive components like video players, conditional rendering beats CSS hiding every time.
+
+## The Results
+
+The final metrics speak for themselves:
+
+- **66% faster page load**: from 11.3s to 3.8s
+- **37% faster interactivity**: DOMContentLoaded improved from 3.1s to 1.9s
+- **Zero-latency filtering**: filtering now happens entirely client-side
+- **Smoother video experience**: videos load on demand rather than all at once
+
+More importantly, user engagement with our search page increased dramatically after the relaunch, with longer session durations and higher conversion rates to lesson enrollments.
+
+## Final Thoughts
+
+Architecture is rarely about choosing the theoretically optimal solution—it's about finding the right blend of patterns that work for your specific constraints. For our relatively small but video-heavy catalog, the combination of server-rendering, client-side filtering, and optimized video loading created the best user experience.
+
+The most valuable lesson from this project wasn't technical—it was about the importance of questioning assumptions and approaching problems methodically. Sometimes the breakthrough doesn't come from adding more optimizations but from taking a step back and looking at the system as a whole.
+
+What began as a straightforward architecture project became one of the most educational experiences of my time at Til, reinforcing that performance optimization is as much about detective work as it is about technical implementation.

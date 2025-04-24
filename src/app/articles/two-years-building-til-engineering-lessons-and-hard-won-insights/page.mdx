@@ -1,0 +1,827 @@
+import { ArticleLayout } from '@/components/ArticleLayout'
+import Til from './til.png'
+
+export const article = {
+  author: 'Facundo Martin',
+  date: '2025-04-24',
+  title: '2 Years Building TIL: Engineering Lessons & Hard-Won Insights',
+  description:
+    'A reflective journey through two years of engineering growth at Til, where building a guitar lesson marketplace taught me invaluable lessons about software architecture and sustainable development practices.',
+}
+
+export const metadata = {
+  title: article.title,
+  description: article.description,
+}
+
+export default (props) => <ArticleLayout article={article} {...props} />
+
+When I joined <a href="https://www.til.co/" target="_blank" rel="noopener noreferrer nofollow" className="no-underline">Til</a> as the 3rd engineer, we were a seed-stage startup with a mission: **build the best online marketplace for guitar lessons**. Two years later, we've shipped a lot of code—some of it great, but also plenty of gnarly, "what was I thinking?" moments.
+
+<Image src={Til} alt="" />
+
+It is no secret that **startups reward speed**. We optimized for velocity, shipped fast, broke things, and patched them later. But after maintaining countless projects—greenfield features, API endpoints, cron jobs, and late-night refactors—I noticed a pattern: **the same types of tech debt kept resurfacing**.
+
+Today, I'm looking back at everything we've built and openly sharing the hard lessons I would've loved to realize earlier. Not for clout, but because I genuinely believe that understanding these patterns could've helped us write more robust code, improve developer experience, and create a stronger engineering culture in our team.
+
+## 1. The OOP Blind Spot (Yes, Even in JavaScript)
+
+Every application has core business rules that repeat across features.
+
+If you were developing Airbnb, you'd probably need consistent ways to calculate:
+
+- A host's _response rate_ (for search rankings and Superhost status)
+- A listing's _average rating_ (shown on cards, profiles, and pricing tools)
+- Booking availability (used in search, checkout, and calendar sync)
+
+These aren't just displays—they're critical business logic that can't afford inconsistencies.
+
+---
+
+At Til, our **Teacher** model suffered the same fate. Initially, the logic was straightforward - just calculate an average of ratings. But as the platform grew, _so did the complexity_.
+
+Eventually, calculating a teacher's average rating required aggregating data from three sources:
+
+1. **Class Reviews**: Ratings for entire courses (e.g., "Great 12-week blues class!")
+2. **Section Reviews**: Per-lesson feedback (e.g., "Session 3 was confusing")
+3. **External Reviews**: Ratings from other platforms (to boost credibility for new teachers)
+
+What started as simple calculations scattered across utilities, components, and API routes grew increasingly complex—until we hit a breaking point:
+
+```typescript
+// This mess appeared in multiple places with subtle variations
+const totalStudents = _.chain(user.classesAsTeacher)
+  .flatMap('sections')
+  .sumBy((section) => section.enrollments.length)
+  .value()
+
+// Calculate total lessons using lodash
+const totalLessons = _.chain(user.classesAsTeacher)
+  .flatMap('sections')
+  .flatMap('sectionMeetings')
+  .filter(
+    (meeting) =>
+      meeting.status === 'Scheduled' &&
+      new Date(meeting.meetingDate) < new Date(),
+  )
+  .size()
+  .value()
+
+// Consolidate all reviews into a single format
+const allTilReviews = user.classesAsTeacher.flatMap((classData) => [
+  ...classData.classReviews.map((r) => ({
+    type: 'platform' as const,
+    rating: r.rating,
+    studentName: r.student.name,
+    reviewId: r.reviewId.toString(),
+    review: r.review || undefined,
+    createdAt: r.createdAt,
+  })),
+  ...classData.sections.flatMap((s) =>
+    s.sectionMeetings.flatMap((m) =>
+      m.meetingFeedbacks.map((f) => ({
+        type: 'platform' as const,
+        rating: f.rating,
+        studentName: f.student.name,
+        reviewId: f.feedbackId.toString(),
+        review: undefined,
+        createdAt: f.createdAt,
+      })),
+    ),
+  ),
+])
+
+const externalReviews = (
+  user.classesAsTeacher[0]?.teacher.externalTeacherReview || []
+).map((r) => ({
+  type: 'external' as const,
+  rating: r.rating,
+  studentName: r.reviewerName,
+  reviewId: r.reviewId,
+  review: r.review || undefined,
+  createdAt: r.createdAt,
+}))
+
+const allTeacherReviews = [...allTilReviews, ...externalReviews].sort(
+  (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+)
+
+const tilAvgRating =
+  _.chain(allTilReviews)
+    .groupBy('studentUserId')
+    .map((reviews) => _.meanBy(reviews, 'rating'))
+    .mean()
+    .value() || 0
+
+const tilReviewCount = _.uniqBy(allTilReviews, 'studentUserId').length
+const externalAvgRating = _.meanBy(externalReviews, 'rating') || 0
+const externalReviewCount = externalReviews.length
+
+const totalReviewCount = tilReviewCount + externalReviewCount
+const overallAvgRating = totalReviewCount
+  ? Number(
+      (
+        (tilAvgRating * tilReviewCount +
+          externalAvgRating * externalReviewCount) /
+        totalReviewCount
+      ).toFixed(1),
+    )
+  : 0
+
+return { totalReviewCount, overallAvgRating }
+```
+
+You can imagine how painful it was to maintain this scattered logic across our application. As the logic grew more complex, the problems multiplied in two directions:
+
+**For engineers (poor developer experience):**
+
+- Every change meant hunting down every instance across components, API routes, and utilities
+- No single source of truth for test coverage or documentation
+- Onboarding new developers required showing them all the places this logic lived
+
+**For users (poor user experience):**
+
+- Different weightings in the search API vs. profile page led to inconsistent ratings
+- Slightly different filtering for external reviews in analytics created confusing reports
+- When we added review moderation, some parts of the app showed moderated reviews while others didn't
+
+It was a maintenance nightmare that directly impacted both our development velocity and user trust. And since our business rules around ratings changed frequently (as we refined our marketplace), these problems kept recurring.
+
+**The Fix: Encapsulation, Not Dogma**
+
+We didn't need Java-style OOP, but we _did_ need single sources of truth. Here's what a `Teacher` class could've looked like:
+
+```typescript
+class Teacher {
+  constructor(private userData: TeacherData) {}
+
+  // Core aggregation happens in ONE place
+  get reviews() {
+    // Internal reviews from our platform
+    const platformReviews = this.userData.classesAsTeacher.flatMap(
+      (classData) => [
+        // Class-level reviews
+        ...classData.classReviews.map(this.formatClassReview),
+        // Individual session reviews
+        ...classData.sections.flatMap((s) =>
+          s.sectionMeetings.flatMap((m) =>
+            m.meetingFeedbacks.map(this.formatSessionReview),
+          ),
+        ),
+      ],
+    )
+
+    // External reviews from other platforms
+    const externalReviews = (
+      this.userData.classesAsTeacher[0]?.teacher.externalTeacherReview || []
+    ).map(this.formatExternalReview)
+
+    return {
+      all: [...platformReviews, ...externalReviews].sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+      ),
+      platform: platformReviews,
+      external: externalReviews,
+    }
+  }
+
+  // Business logic lives here, not scattered in components
+  getAverageRating(classType?: 'PrivateLesson' | 'GroupClass') {
+    const { platform, external } = this.reviews
+
+    // Platform-specific logic (de-duplicate by student)
+    const platformAvg =
+      _.chain(platform)
+        .groupBy('studentUserId')
+        .map((reviews) => _.meanBy(reviews, 'rating'))
+        .mean()
+        .value() || 0
+
+    const platformCount = _.uniqBy(platform, 'studentUserId').length
+
+    // For private lessons, we include external reviews in the calculation
+    if (classType === 'PrivateLesson') {
+      const externalAvg = _.meanBy(external, 'rating') || 0
+      const externalCount = external.length
+      const totalCount = platformCount + externalCount
+
+      // Weighted average calculation with external reviews
+      return totalCount
+        ? Number(
+            (
+              (platformAvg * platformCount + externalAvg * externalCount) /
+              totalCount
+            ).toFixed(1),
+          )
+        : 0
+    }
+
+    // For group classes or unspecified, just use platform reviews
+    return Number(platformAvg.toFixed(1))
+  }
+
+  // Other business methods
+  getTotalStudents() {
+    return _.chain(this.userData.classesAsTeacher)
+      .flatMap('sections')
+      .sumBy((section) => section.enrollments.length)
+      .value()
+  }
+
+  getTotalLessons() {
+    return _.chain(this.userData.classesAsTeacher)
+      .flatMap('sections')
+      .flatMap('sectionMeetings')
+      .filter(
+        (meeting) =>
+          meeting.status === 'Scheduled' &&
+          new Date(meeting.meetingDate) < new Date(),
+      )
+      .size()
+      .value()
+  }
+
+  // Helper methods for formatting
+  private formatClassReview(r: ClassReview) {
+    return {
+      type: 'platform' as const,
+      rating: r.rating,
+      studentName: r.student.name,
+      studentUserId: r.student.id,
+      reviewId: r.reviewId.toString(),
+      review: r.review || undefined,
+      createdAt: r.createdAt,
+    }
+  }
+
+  private formatSessionReview(f: MeetingFeedback) {
+    return {
+      type: 'platform' as const,
+      rating: f.rating,
+      studentName: f.student.name,
+      studentUserId: f.student.id,
+      reviewId: f.feedbackId.toString(),
+      review: undefined,
+      createdAt: f.createdAt,
+    }
+  }
+
+  private formatExternalReview(r: ExternalReview) {
+    return {
+      type: 'external' as const,
+      rating: r.rating,
+      studentName: r.reviewerName,
+      reviewId: r.reviewId,
+      review: r.review || undefined,
+      createdAt: r.createdAt,
+    }
+  }
+}
+```
+
+**Why it matters:**
+
+- **Testing:** We can now mock `Teacher` once and test all its methods, instead of replicating test logic everywhere.
+- **Consistency:** When product asks "how many students has this teacher taught?", there's exactly one answer.
+- **Robustness:** The system can handle edge cases (like teachers with no reviews) and business rule changes in a predictable way.
+- **Maintenance:** Business rule changes (like weighing recent reviews more heavily) happen in one place.
+- **Developer Experience:** New engineers can discover what a `Teacher` can do by exploring a single class.
+
+**Lesson:** OOP isn't about class hierarchies or design patterns—it's about _ownership_. Even in a JavaScript/React codebase, your domain models deserve autonomy.
+
+## 2. The "Move Fast, Learn Slow" Trap
+
+In a seed-stage startup, **shipping fast is the name of the game**. Sometimes that means skimming documentation, copy-pasting examples, and figuring things out as you go. I think we all have been guilty of this at some point.
+
+The problem isn't about cutting corners; it's that we rarely circle back to fill those knowledge gaps. We end up with a shallow understanding of the tools we use every day, missing out on powerful features that could save us weeks of development time.
+
+I've personally made mistakes like missing the [TypeScript inference feature](https://docs.convex.dev/understanding/best-practices/typescript#writing-frontend-code-in-typescript) in Convex when building our live chat feature, and overlooking [advanced hook patterns](https://nuqs.47ng.com/docs/tips-tricks#reusing-hooks) in nuqs for our search filtering functionality.
+
+Let's look at some concrete examples of how this pattern affected our development at Til.
+
+### **Example: Query Params Chaos**
+
+URL parameters are the backbone of any interactive web app. At Til, we needed them for everything—search filters, pagination, view states—but Next.js doesn't have an opinionated approach to handling them.
+
+At first, we used the basic built-in tools\***\*:\*\***
+
+```typescript
+// 🚩 Using bare-bones URL params
+// Using Web APIs
+const searchParams = new URLSearchParams(window.location.search)
+const priceFilter = searchParams.get('price') // String or null, no types
+if (priceFilter) {
+  const price = parseInt(priceFilter) // What if it's not a number?
+  // ...
+}
+
+// Or with Next.js hooks
+function SearchPage() {
+  const searchParams = useSearchParams()
+  const q = searchParams?.get('q') || '' // Default value handling everywhere
+  const page = Number(searchParams?.get('page') || '1') // Type conversion everywhere
+
+  // Good luck debugging if someone writes ?page=banana
+}
+```
+
+This created a bunch of issues that weren't obvious at first:
+
+- **Typo nightmare:** Was it `skillLevel` or `skill_level` or `skillLevels`? With no static typing, there's no LSP support or linting to catch these errors before runtime.
+- **Unsafe type conversions:** Every param access needed manual parsing and validation.
+- **Knowledge silos:** To understand available filters, you had to read through component code.
+- **Testing headaches:** No centralized way to mock or test URL parameters.
+- **Slow onboarding:** New devs had to manually trace filter logic to understand our URL structure.
+
+After many bug fixes and wasted hours, we initially adopted nuqs for basic type safety. But like many tools, we only scratched the surface of what it could do.
+
+It wasn't until I [rearchitected our search page](https://yourblog.com/search-architecture) that I stumbled upon Aurora Scharff's excellent article on [managing complex search params](https://aurorascharff.no/posts/managing-advanced-search-param-filtering-next-app-router/) in Next.js. Seeing someone dive deeper into the library's capabilities encouraged me to explore it more thoroughly myself, resulting in a solution that was fully typed, centrally managed, and built with reusable hooks.
+
+Here's what a proper implementation of nuqs looks like:
+
+1. Define all parsers in one place
+
+```typescript
+// nuqs-parser.ts
+import { parseAsString, parseAsInteger, parseAsStringEnum } from 'nuqs/server'
+
+// Define our enums
+export enum SortOrder {
+  Relevant = 'relevant',
+  Newest = 'newest',
+  PriceLow = 'price-low',
+  PriceHigh = 'price-high',
+}
+
+// Simple, focused parsers
+export const searchParsers = {
+  // Basic string parser with default
+  q: parseAsString.withDefault(''),
+
+  // Number with validation
+  maxPrice: parseAsInteger.withDefault(200),
+
+  // Enum with type safety
+  sort: parseAsStringEnum<SortOrder>(Object.values(SortOrder)).withDefault(
+    SortOrder.Relevant,
+  ),
+}
+```
+
+2. Create a reusable hook (client-side)
+
+```typescript
+// use-search.ts
+'use client'
+
+import { useQueryStates } from 'nuqs'
+import { searchParsers } from './nuqs-parser'
+
+export function useSearch() {
+  return useQueryStates(searchParsers)
+}
+```
+
+3. Use it in client components with full type safety
+
+```jsx
+// search-filters.tsx
+"use client"
+
+export function SearchBar() {
+  // Tip: You can destructure for cleaner access
+  const [{ q: query, sort }, setFilters] = useSearch();
+
+  return (
+    <div>
+      <input
+        value={query}
+        onChange={(e) => setFilters({ q: e.target.value })}
+        placeholder="Search teachers"
+      />
+
+      <select
+        value={sort}
+        onChange={(e) => setFilters({ sort: e.target.value as SortOrder })}
+      >
+        <option value={SortOrder.Relevant}>Most Relevant</option>
+        <option value={SortOrder.Newest}>Newest</option>
+        <option value={SortOrder.PriceLow}>Price: Low to High</option>
+        <option value={SortOrder.PriceHigh}>Price: High to Low</option>
+      </select>
+    </div>
+  );
+}
+```
+
+This approach completely transformed our developer experience:
+
+- **Type safety:** TypeScript knows exactly what parameters exist and their types.
+- **Centralized schema:** One place to understand all URL parameters.
+- **Default values:** Handled consistently across the app.
+- **Automatic serialization/parsing:** Array params like `?styles=jazz&styles=rock` just work.
+- **Reusable hooks:** Creating a [custom hook](https://nuqs.47ng.com/docs/tips-tricks#reusing-hooks) saved us from duplicating logic.
+
+But the key insight wasn't the specific library—it was that taking time to deeply understand our tools paid massive dividends.
+
+**Lesson:** Mastery isn't about memorizing docs—it's about _investing time in leverage points_. A day spent deeply learning a tool can save weeks of technical debt. The few hours "lost" to learning proper patterns pays dividends every time you touch that code again.
+
+And please, let's not kid ourselves with those `// TODO: Refactor this later` comments. We both know that'll never actually happen and they're just going to haunt the codebase forever.
+
+## **3. The Missing Blueprint: When Best Practices Aren't Documented**
+
+When I joined Til as a frontend engineer with the goal of ramping up to fullstack, I faced a classic challenge: I didn't know what I didn't know.
+
+In a fast-paced startup, the natural instinct is to mimic what your peers are doing. Why reinvent the wheel when there's existing code to copy? The problem was, with no established best practices and the pressure of tight deadlines, I was sometimes copying _anti-patterns_ without realizing it.
+
+It's not hard to imagine how having multiple engineers write code without shared guidelines can quickly lead to inconsistency. When implementation details are left to individual interpretation, you end up with a codebase where similar problems are solved in wildly different ways—some elegant, some problematic. And this compounds over time.
+
+**Example: Endpoints Without Standards**
+
+When I started writing APIs with tRPC, one of the benefits was that I could easily query our database with an ORM and retrieve all the data I needed for the frontend. This allowed me to ship fullstack features quickly and felt empowering.
+
+However, circling back to the "I didn't know what I didn't know" problem, with no guidelines and few examples of robust, production-ready endpoints, I was unaware of the anatomy of a truly great API endpoint.
+
+Looking back, I was completely unaware of:
+
+- **Optimizing database round-trips:** Reducing latency by combining queries or using efficient joins
+- **Parallelizing queries:** Using Promise.all for independent queries to drastically cut request time
+- **Transactions:** Ensuring related database operations succeed or fail as an atomic unit
+- **Retries:** Implementing automatic retry logic for failed operations with backoff strategies
+- **Proper error handling:** Implementing consistent error patterns with appropriate status codes and messages
+- **Type-safe responses:** Creating shared types between frontend and backend for robust integrations
+- **Idempotency:** Ensuring that API requests can be safely retried without causing duplicates
+- **Performance considerations:** Selecting only the needed fields and paginating large result sets
+- **Frontend error integration:** Designing errors that the UI can meaningfully present to users
+- **Observability:** Adding structured logging and metrics to track endpoint performance and issues
+- **Resource validation:** Verifying that requested resources exist before performing related operations
+
+Here's how this played out in practice:
+
+```typescript
+// 🚩 My early tRPC endpoint (simplified)
+export const teacherRouter = createTRPCRouter({
+  getTeacherProfile: publicProcedure
+    .input(z.object({ teacherId: z.string() }))
+    .query(async ({ input }) => {
+      // Problem 1: Sequential queries creating high latency
+      const teacher = await prisma.teacher.findUnique({
+        where: { id: input.teacherId },
+        include: { user: true },
+      })
+
+      // Problem 2: Separate query for classes
+      const classes = await prisma.class.findMany({
+        where: { teacherId: input.teacherId },
+        include: {
+          sections: { include: { sectionMeetings: true } },
+        },
+      })
+
+      // Problem 3: Separate query for reviews
+      const reviews = await prisma.review.findMany({
+        where: { teacherId: input.teacherId },
+        include: { student: true },
+      })
+
+      // Problem 4: No error handling
+      // Problem 5: No transformation or optimization
+      return { teacher, classes, reviews }
+    }),
+})
+```
+
+After months of learning and refactoring, I've gravitated toward a more robust pattern that's served our team better. Today, I'd approach the same problem differently:
+
+```typescript
+// ✅ A more mature tRPC endpoint
+export const teacherRouter = createTRPCRouter({
+  getTeacherProfile: publicProcedure
+    .input(
+      z.object({
+        teacherId: z.string().uuid().nonempty('Teacher ID is required'),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        // Run queries in parallel - huge performance improvement
+        const [teacher, classes, reviews] = await Promise.all([
+          prisma.teacher.findUniqueOrThrow({
+            where: { id: input.teacherId },
+            select: {
+              id: true,
+              bio: true,
+              user: { select: { name: true, profileImage: true } },
+            },
+          }),
+          prisma.class.findMany({
+            where: { teacherId: input.teacherId },
+            select: {
+              id: true,
+              title: true,
+              price: true,
+              _count: { select: { students: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+          }),
+          prisma.review.findMany({
+            where: { teacherId: input.teacherId },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              rating: true,
+              text: true,
+              createdAt: true,
+              student: { select: { user: { select: { name: true } } } },
+            },
+          }),
+        ])
+
+        // Transform to optimized response shape
+        const response: TeacherProfileResponse = {
+          teacher: {
+            id: teacher.id,
+            name: teacher.user.name,
+            profileImage: teacher.user.profileImage,
+            bio: teacher.bio,
+          },
+          recentClasses: classes.map((c) => ({
+            id: c.id,
+            title: c.title,
+            price: c.price,
+            studentCount: c._count.students,
+          })),
+          testimonials: reviews.map((r) => ({
+            id: r.id,
+            rating: r.rating,
+            text: r.text,
+            studentName: r.student.user.name,
+            date: r.createdAt.toISOString(),
+          })),
+          stats: {
+            totalClasses: classes.length,
+            averageRating: reviews.length
+              ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
+              : 0,
+          },
+        }
+
+        return response
+      } catch (error) {
+        // Proper error handling with status codes
+        if (error.code === 'P2025') {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Teacher profile not found',
+            cause: error,
+          })
+        }
+
+        // Log unexpected errors
+        logger.error('Failed to fetch teacher profile', {
+          teacherId: input.teacherId,
+          error: error.message,
+        })
+
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Failed to fetch teacher profile',
+        })
+      }
+    }),
+})
+```
+
+The evolution is clear, but it took months of learning through trial and error. What could have shortened this journey? A simple documentation of best practices
+
+This doesn't need to be complicated - you can quickly create guidelines using tools like Docusaurus, GitBook, or even Notion if you want something with less overhead.
+
+Yes, it's not exciting work. Yes, it will take some time away from building features. But the irony? Creating this documentation would have taken just a few hours, but **could have saved weeks of accumulated technical debt and onboarding time**.
+
+**Lesson:** Document what you know, not just what you build. The most valuable documentation isn't about specific code, but about patterns and principles. Engineering culture is built on shared knowledge.
+
+## 4. Knowledge Exodus: When Architecture Walks Out the Door
+
+A few months ago, our CTO left the company. Suddenly, I found myself diving deep into systems I hadn't built and—more importantly—weren't documented anywhere.
+
+That's when I learned a crucial lesson: **there's a massive difference between reading code and understanding architecture**.
+
+Understanding _what_ the code does is surprisingly easy, especially with modern IDEs and AI assistance. But understanding _why_ things were built that particular way? That's where the real challenge lies.
+
+**The Payments Mystery**
+
+Our payments system was a perfect example. When I first looked at it, I saw a complex dance of interconnected components:
+
+- Stripe webhooks handling transaction events
+- Database models tracking subscription status
+- Cron jobs reconciling payment records
+- API endpoints for upgrades/downgrades
+
+The code itself was readable. But the critical questions weren't answered anywhere:
+
+- Why use webhooks instead of direct API calls?
+- Why store redundant payment status in our database?
+- What happens if webhooks fail or arrive out of order?
+- How do we handle retries and idempotency?
+
+I spent weeks reverse-engineering the architectural decisions, asking "why this approach?" when I could have been building new features instead. And I kept thinking: if only there had been a simple document explaining the trade-offs that were considered.
+
+**Architecture Lives in Decisions, Not Code**
+
+High-quality code can tell you _how_ something works. But it can't tell you:
+
+- What alternatives were considered and rejected
+- What edge cases the design specifically addresses
+- Which components are expected to evolve and which are stable
+- What technical debt was knowingly taken on and why
+- What business constraints shaped the technical approach
+
+These decisions exist only as institutional knowledge—which walks out the door when people leave.
+
+**The ADR Solution**
+
+We've now adopted a simple practice: Architecture Decision Records (ADRs). Nothing fancy, just markdown files in our repo that document important design choices:
+
+```md
+# Architecture Decision Record: Payment Processing System
+
+## Context
+
+We need a reliable way to handle payments for our marketplace. Teacher payouts and student
+payments must be tracked, reconciled, and reported for accounting purposes.
+
+## Decision
+
+We will use a combination of Stripe webhooks and periodic cron jobs:
+
+- Webhooks provide real-time updates about payment status changes
+- Cron jobs reconcile our database with Stripe (catch missed webhooks)
+- Local payment status stored in DB to avoid constant Stripe API calls
+- Idempotency keys used in all Stripe communications
+
+## Alternatives Considered
+
+1. **Direct API calls only**: Rejected because they could fail silently at crucial moments
+   (like when a student is checking out). Webhooks give us redundancy.
+
+2. **Webhooks only**: Rejected because webhooks can sometimes arrive out of order or be missed
+   entirely. Cron jobs give us a backup system.
+
+3. **Third-party payment processor**: Rejected because we need custom logic for our teacher
+   payment split, and these services add significant fees.
+
+## Consequences
+
+- More complex system to debug (multiple sources of truth)
+- Need to handle webhook failures and retries
+- Slightly higher development cost up front
+- Much more reliable long-term, especially at scale
+
+## Owner & Date
+
+@cto - 2023-04-15
+```
+
+This simple document would have saved me _weeks_ of detective work. Now we write them for all significant architectural decisions.
+
+**Benefits Beyond Documentation**
+
+Creating ADRs has had surprising benefits beyond just documenting decisions:
+
+1. **Forces clarity**: Having to justify decisions in writing leads to better architecture
+2. **Onboards engineers faster**: New team members understand not just how, but why
+3. **Builds institutional memory**: Knowledge remains even as team composition changes
+4. **Reduces re-litigation**: "Why don't we just use X?" can be answered by pointing to the ADR
+5. **Sets engineering cultural norms**: Demonstrates what we value in system design
+6. **Encourages thoughtful decisions**: Knowing you'll need to document "why" discourages hasty choices
+
+The architecture document doesn't need to be perfect or comprehensive. It just needs to capture the key decisions and their rationales. Even a rough document is infinitely better than relying on tribal knowledge that evaporates with team changes.
+
+**Lesson:** Document _why_, not just _how_. Architectural decisions are your most valuable intellectual property as an engineering team, yet they're often the least preserved. Remember: code tells you what happened, but documentation tells you why it happened that way.
+
+## 5. Metrics > Opinions
+
+Like most startups, we shipped features at a dizzying pace. But an uncomfortable truth emerged: we often had no idea if users actually liked or used what we built.
+
+Consider this real scenario:
+
+We spent weeks building a referral system that would let students invite friends and earn discounts. It seemed like a no-brainer for marketplace growth. But after launch, barely anyone used it—and we had no clear data on why.
+
+**The uncomfortable question was**: Did users not want to refer friends, or did they simply not discover the feature? Was the incentive too small? Was the UI confusing? Without data, we were just guessing.
+
+**The Opinion Trap**
+
+In the absence of data, opinions rush in to fill the vacuum. This leads to circular conversations that go nowhere:
+
+- "I think users would prefer bigger discounts"
+- "The button placement isn't obvious enough"
+- "Our competitors all have referral programs"
+- "Maybe our students just don't know that many other guitar learners"
+
+Everyone has a theory, but without data, it's just guesswork. Even user interviews can be misleading—what people say they want often differs dramatically from how they actually behave.
+
+**Feature Shipping ≠ Feature Success**
+
+We'd fallen into a common trap: measuring success by deployment rather than usage. Our definition of "done" stopped at "it's in production without bugs."
+
+This was especially problematic because Til was a _marketplace_. We needed to find product-market fit, which meant constantly testing hypotheses about what teachers and students needed. Shipping without measuring is like throwing darts blindfolded—you might hit something valuable, but you'll never know why or how to do it again.
+
+**What I Wish We'd Done**
+
+In retrospect, one of my biggest regrets is not pushing harder for a metrics-driven culture. We had PostHog installed, but we weren't using it meaningfully to drive decisions.
+
+If I could go back, here's the approach I would've advocated for:
+
+1. **Before coding**: Define what success looks like numerically
+2. **During development**: Instrument key user actions with tracking
+3. **After shipping**: Monitor adoption and engagement for 4-6 weeks
+4. **Based on data**: Double down on what works, fix what's fixable, and sunset what doesn't serve users
+
+One particularly enlightening story comes from PostHog itself. Their founder [James Hawkins shared](https://youtu.be/NAMsSkqqWpg?t=392) that one of their most important features—session recordings—only exists because an engineer insisted on building it, despite leadership skepticism. The data showed overwhelming user engagement, completely changing the company's perspective.
+
+**Implementation Would've Been Simple**
+
+Setting this up wouldn't have required much effort. Here's how a simple tracking wrapper could have looked:
+
+```typescript
+// Simple tracking wrapper
+export function trackEvent(event: string, properties?: Record<string, any>) {
+  try {
+    posthog.capture(event, {
+      ...properties,
+      env: process.env.NODE_ENV,
+    })
+  } catch (e) {
+    console.error('Event tracking failed:', e)
+  }
+}
+```
+
+And its usage in components would have been straightforward:
+
+```jsx
+function ReferralButton() {
+  return (
+    <button
+      onClick={() => {
+        openReferralModal()
+        trackEvent('referral_button_clicked')
+      }}
+    >
+      Invite Friends
+    </button>
+  )
+}
+```
+
+**A Candid Reflection**
+
+I'm writing this with a heavy heart—Til shut down last week. We built something users loved, but not enough of them to sustain the business. Would better metrics have saved us? Perhaps not. But they might have helped us focus our limited resources on the features that truly moved the needle.
+
+Looking at other successful marketplaces, the pattern is clear: they ruthlessly track and optimize core metrics like conversion rate, retention, and user satisfaction. They don't just ship features—they ship instrumented experiments that either prove their worth or get improved/removed.
+
+**The Takeaway**
+
+I now believe that uninstrumented features are just expensive guesses. Data doesn't guarantee success, but it gives you a fighting chance to learn and adapt. In my next role, I'll be advocating from day one for a culture where we don't just celebrate shipping—we celebrate learning from what we've shipped.
+
+The most elegant code in the world doesn't matter if users don't engage with it. And without metrics, you'll never really know if they do.
+
+---
+
+## The Meta-Mistake: Neglecting Learning Loops
+
+After two years at Til and now watching its sunset, I've had time to reflect on what actually mattered at our seed-stage startup. While we chased product-market fit through countless features and pivots, I now see we missed something fundamental.
+
+The biggest mistake wasn't any single technical decision – it was **failing to build systems for growth and learning within our team.**
+
+In the startup world, you're constantly searching for your external growth engine – that magical combination of features, pricing, and market positioning that unlocks sustainable growth. You face countless challenges you can't control: market timing, competitive pressures, funding environments, and macroeconomic factors.
+
+But there's one critical engine that's entirely within your control: your team's ability to learn and improve. This internal growth engine compounds over time, making each feature better, each engineer more effective, and each pivot less painful.
+
+### The patterns were everywhere:
+
+All the mistakes I've outlined share a common thread—they represent missed opportunities to establish _learning loops_ within our engineering culture:
+
+| Mistake               | Root Issue                                                                  |
+| --------------------- | --------------------------------------------------------------------------- |
+| OOP Blind Spot        | No consolidation of core business logic into maintainable, testable classes |
+| Move Fast, Learn Slow | Prioritizing quick implementation over mastering tools and frameworks       |
+| Missing Blueprint     | Lack of engineering standards for critical patterns like API endpoints      |
+| Knowledge Exodus      | No documentation of architectural decisions and their rationales            |
+| Metrics > Opinions    | Shipping features without instrumentation to measure actual usage           |
+
+When you're constantly shipping to hit aggressive deadlines, it's easy to focus solely on output: features launched, user growth metrics, sprint completion percentages. But what we neglected was improving how we worked together and learned as a team.
+
+### What I'd do differently
+
+If I could go back and change one thing, it wouldn't be a technical decision. It would be advocating for dedicated time to build our team's capacity to learn:
+
+- Allocating time in sprints for documentation and knowledge sharing
+- Creating simple templates for architectural decisions
+- Establishing core patterns for common engineering challenges
+- Building instrumentation into our definition of "done"
+- Scheduling regular reviews of what we've learned from shipped features
+
+I don't pretend to know what makes every startup successful. But I do know that our ability to learn from our mistakes was more limited than it needed to be.
+
+As I move on to my next role, that's the one thing I'm taking with me: **in the face of startup uncertainty, your team's ability to learn might be the only sustainable advantage you have**. Don't take it for granted.
