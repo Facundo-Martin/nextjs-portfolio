@@ -15,11 +15,12 @@ import logoTil from '@/images/logos/til.png'
 import logoSpume from '@/images/logos/spume.png'
 import logoText2Order from '@/images/logos/text2order.png'
 import logoCulturalCare from '@/images/logos/culturalcare.png'
-import image1 from '@/images/photos/image-1.jpg'
-import image2 from '@/images/photos/image-2.jpg'
-import image3 from '@/images/photos/image-3.jpg'
-import image4 from '@/images/photos/image-4.jpg'
-import image5 from '@/images/photos/image-5.jpg'
+import photo1 from '@/images/photos/self.webp'
+import photo2 from '@/images/photos/cala.webp'
+import photo3 from '@/images/photos/setup.webp'
+import photo4 from '@/images/photos/friends.webp'
+import photo5 from '@/images/photos/besties.webp'
+
 import { type ArticleWithSlug, getAllArticles } from '@/lib/articles'
 import { formatDate } from '@/lib/formatDate'
 
@@ -253,7 +254,7 @@ function Photos() {
   return (
     <div className="mt-16 sm:mt-20">
       <div className="-my-4 flex justify-center gap-5 overflow-hidden py-4 sm:gap-8">
-        {[image1, image2, image3, image4, image5].map((image, imageIndex) => (
+        {[photo1, photo2, photo3, photo4, photo5].map((image, imageIndex) => (
           <div
             key={image.src}
             className={clsx(
@@ -277,7 +278,6 @@ function Photos() {
 export default async function Home() {
   let articles = (await getAllArticles())
     .filter((x) => {
-      console.log('article...', { x })
       return x.isFeatured
     })
     .slice(0, 4)
