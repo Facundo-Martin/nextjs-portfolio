@@ -3,47 +3,49 @@ import Image from 'next/image'
 
 import { Card } from '@/components/Card'
 import { SimpleLayout } from '@/components/SimpleLayout'
-import logoAnimaginary from '@/images/logos/animaginary.svg'
-import logoCosmos from '@/images/logos/cosmos.svg'
-import logoHelioStream from '@/images/logos/helio-stream.svg'
-import logoOpenShuttle from '@/images/logos/open-shuttle.svg'
-import logoPlanetaria from '@/images/logos/planetaria.svg'
+import avatar from '@/images/avatar.png'
+import logoTil from '@/images/logos/til.png'
 
 const projects = [
   {
-    name: 'Planetaria',
+    name: 'Building a Lightning-Fast Search Experience',
     description:
-      'Creating technology to empower civilians to explore space on their own terms.',
-    link: { href: 'http://planetaria.tech', label: 'planetaria.tech' },
-    logo: logoPlanetaria,
+      'A technical deep-dive into key architectural decisions and performance breakthroughs that enabled building a lightning-fast TikTok-inspired search interface through strategic caching, client-side filtering, and video optimization techniques.',
+    link: {
+      href: '/articles/building-a-lightning-fast-search-experience-mistakes-breakthroughs-and-performance-wins',
+      label: 'Read article',
+    },
+    logo: logoTil,
   },
   {
-    name: 'Animaginary',
+    name: 'JSON as a Temporary Database: How We Scaled Data Prototyping',
     description:
-      'High performance web animation library, hand-written in optimized WASM.',
-    link: { href: '#', label: 'github.com' },
-    logo: logoAnimaginary,
+      'How we used JSON as a flexible, temporary database solution when faced with fragmented datasets, uncertain SEO strategy, and evolving product specifications—a pragmatic approach that drove real results.',
+    link: {
+      href: '/articles/json-as-a-temporary-database-how-we-scaled-data-prototyping',
+      label: 'Read article',
+    },
+    logo: logoTil,
   },
   {
-    name: 'HelioStream',
+    name: '2 Years Building TIL: Engineering Lessons & Hard-Won Insights',
     description:
-      'Real-time video streaming library, optimized for interstellar transmission.',
-    link: { href: '#', label: 'github.com' },
-    logo: logoHelioStream,
+      'A reflective journey through two years of engineering growth at Til, where building a guitar lesson marketplace taught me invaluable lessons about software architecture and sustainable development practices.',
+    link: {
+      href: '/articles/two-years-building-til-engineering-lessons-and-hard-won-insights',
+      label: 'Read article',
+    },
+    logo: logoTil,
   },
   {
-    name: 'cosmOS',
+    name: "The 2025 Startup Tech Stack: A Founding Engineer's Blueprint",
     description:
-      'The operating system that powers our Planetaria space shuttles.',
-    link: { href: '#', label: 'github.com' },
-    logo: logoCosmos,
-  },
-  {
-    name: 'OpenShuttle',
-    description:
-      'The schematics for the first rocket I designed that successfully made it to orbit.',
-    link: { href: '#', label: 'github.com' },
-    logo: logoOpenShuttle,
+      'An opinionated, comprehensive guide to building modern startup tech stacks in 2025, focusing on pragmatic architecture decisions that enable small teams to ship quickly and iterate toward product-market fit.',
+    link: {
+      href: '/articles/the-2025-startup-tech-stack-a-founding-engineers-opinionated-blueprint',
+      label: 'Read article',
+    },
+    logo: avatar,
   },
 ]
 
@@ -63,11 +65,11 @@ export const metadata: Metadata = {
   description: 'Things I’ve made trying to put my dent in the universe.',
 }
 
-export default function Projects() {
+export default async function Projects() {
   return (
     <SimpleLayout
       title="Things I’ve made trying to put my dent in the universe."
-      intro="I’ve worked on tons of little projects over the years but these are the ones that I’m most proud of. Many of them are open-source, so if you see something that piques your interest, check out the code and contribute if you have ideas for how it can be improved."
+      intro="I don't currently maintain a portfolio of personal projects. In the meantime, here are some articles documenting what I've learned building things for other people."
     >
       <ul
         role="list"
@@ -86,7 +88,9 @@ export default function Projects() {
             <h2 className="mt-6 text-base font-semibold text-zinc-800 dark:text-zinc-100">
               <Card.Link href={project.link.href}>{project.name}</Card.Link>
             </h2>
-            <Card.Description>{project.description}</Card.Description>
+            <Card.Description>
+              <span className="line-clamp-3">{project.description}</span>
+            </Card.Description>
             <p className="relative z-10 mt-6 flex text-sm font-medium text-zinc-400 transition group-hover:text-teal-500 dark:text-zinc-200">
               <LinkIcon className="h-6 w-6 flex-none" />
               <span className="ml-2">{project.link.label}</span>
