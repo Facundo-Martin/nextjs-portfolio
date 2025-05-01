@@ -31,7 +31,14 @@ export function Footer() {
                 <NavLink href="/about">About</NavLink>
                 <NavLink href="/articles">Articles</NavLink>
                 <NavLink href="/projects">Projects</NavLink>
-                <NavLink href="/contact">Contact</NavLink>
+                <a
+                  href="https://www.linkedin.com/in/facundo-martin-dev/"
+                  target="_blank"
+                  rel="noreferrer noopener nofollow"
+                  className="transition hover:text-teal-500 dark:hover:text-teal-400"
+                >
+                  Contact
+                </a>
               </div>
               <p className="text-sm text-zinc-400 dark:text-zinc-500">
                 &copy; {new Date().getFullYear()} Facundo Martin. All rights

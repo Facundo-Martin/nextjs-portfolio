@@ -125,7 +125,14 @@ function MobileNavigation(
             <MobileNavItem href="/about">About</MobileNavItem>
             <MobileNavItem href="/articles">Articles</MobileNavItem>
             <MobileNavItem href="/projects">Projects</MobileNavItem>
-            <MobileNavItem href="/contact">Contact</MobileNavItem>
+            <a
+              href="https://www.linkedin.com/in/facundo-martin-dev/"
+              target="_blank"
+              rel="noreferrer noopener nofollow"
+              className="relative block py-2 transition hover:text-teal-500 dark:hover:text-teal-400"
+            >
+              Contact
+            </a>
           </ul>
         </nav>
       </PopoverPanel>
@@ -170,7 +177,14 @@ function DesktopNavigation(props: React.ComponentPropsWithoutRef<'nav'>) {
         <NavItem href="/about">About</NavItem>
         <NavItem href="/articles">Articles</NavItem>
         <NavItem href="/projects">Projects</NavItem>
-        <NavItem href="/contact">Contact</NavItem>
+        <a
+          href="https://www.linkedin.com/in/facundo-martin-dev/"
+          target="_blank"
+          rel="noreferrer noopener nofollow"
+          className="relative block px-3 py-2 transition hover:text-teal-500 dark:hover:text-teal-400"
+        >
+          Contact
+        </a>
         {/* <NavItem href="/speaking">Speaking</NavItem>
         <NavItem href="/uses">Uses</NavItem> */}
       </ul>
