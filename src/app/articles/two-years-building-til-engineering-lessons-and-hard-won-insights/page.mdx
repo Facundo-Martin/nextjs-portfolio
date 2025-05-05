@@ -304,7 +304,7 @@ Let's look at some concrete examples of how this pattern affected our developmen
 
 URL parameters are the backbone of any interactive web app. At Til, we needed them for everything—search filters, pagination, view states—but Next.js doesn't have an opinionated approach to handling them.
 
-At first, we used the basic built-in tools\***\*:\*\***
+At first, we used the basic built-in tools:
 
 ```typescript
 // 🚩 Using bare-bones URL params
@@ -336,11 +336,11 @@ This created a bunch of issues that weren't obvious at first:
 
 After many bug fixes and wasted hours, we initially adopted nuqs for basic type safety. But like many tools, we only scratched the surface of what it could do.
 
-It wasn't until I [rearchitected our search page](https://yourblog.com/search-architecture) that I stumbled upon Aurora Scharff's excellent article on [managing complex search params](https://aurorascharff.no/posts/managing-advanced-search-param-filtering-next-app-router/) in Next.js. Seeing someone dive deeper into the library's capabilities encouraged me to explore it more thoroughly myself, resulting in a solution that was fully typed, centrally managed, and built with reusable hooks.
+It wasn't until I [rearchitected our search page](https://facundomartin.dev/articles/building-a-lightning-fast-search-experience-mistakes-breakthroughs-and-performance-wins) that I stumbled upon Aurora Scharff's excellent article on [managing complex search params in Next.js](https://aurorascharff.no/posts/managing-advanced-search-param-filtering-next-app-router/). Seeing someone dive deeper into the library's capabilities encouraged me to explore it more thoroughly myself, resulting in a solution that was fully typed, centrally managed, and built with reusable hooks.
 
 Here's what a proper implementation of nuqs looks like:
 
-1. Define all parsers in one place
+1. Define all parsers in one place:
 
 ```typescript
 // nuqs-parser.ts
@@ -356,20 +356,15 @@ export enum SortOrder {
 
 // Simple, focused parsers
 export const searchParsers = {
-  // Basic string parser with default
   q: parseAsString.withDefault(''),
-
-  // Number with validation
   maxPrice: parseAsInteger.withDefault(200),
-
-  // Enum with type safety
   sort: parseAsStringEnum<SortOrder>(Object.values(SortOrder)).withDefault(
     SortOrder.Relevant,
   ),
 }
 ```
 
-2. Create a reusable hook (client-side)
+2. Create a **type-safe** reusable hook (client-side):
 
 ```typescript
 // use-search.ts
@@ -421,17 +416,15 @@ This approach completely transformed our developer experience:
 - **Centralized schema:** One place to understand all URL parameters.
 - **Default values:** Handled consistently across the app.
 - **Automatic serialization/parsing:** Array params like `?styles=jazz&styles=rock` just work.
-- **Reusable hooks:** Creating a [custom hook](https://nuqs.47ng.com/docs/tips-tricks#reusing-hooks) saved us from duplicating logic.
+- **Consolidation:** Creating a custom hook saved us from duplicating logic.
 
-But the key insight wasn't the specific library—it was that taking time to deeply understand our tools paid massive dividends.
+But the key insight wasn't the specific library—it was that **taking time to deeply understand our tools paid massive dividends**.
 
 **Lesson:** Mastery isn't about memorizing docs—it's about _investing time in leverage points_. A day spent deeply learning a tool can save weeks of technical debt. The few hours "lost" to learning proper patterns pays dividends every time you touch that code again.
 
-And please, let's not kid ourselves with those `// TODO: Refactor this later` comments. We both know that'll never actually happen and they're just going to haunt the codebase forever.
+## 3. The Missing Blueprint: When Best Practices Aren't Documented
 
-## **3. The Missing Blueprint: When Best Practices Aren't Documented**
-
-When I joined Til as a frontend engineer with the goal of ramping up to fullstack, I faced a classic challenge: I didn't know what I didn't know.
+When I joined Til as a frontend engineer with the goal of ramping up to fullstack, I faced a classic challenge: **I didn't know what I didn't know**.
 
 In a fast-paced startup, the natural instinct is to mimic what your peers are doing. Why reinvent the wheel when there's existing code to copy? The problem was, with no established best practices and the pressure of tight deadlines, I was sometimes copying _anti-patterns_ without realizing it.
 
@@ -441,7 +434,7 @@ It's not hard to imagine how having multiple engineers write code without shared
 
 When I started writing APIs with tRPC, one of the benefits was that I could easily query our database with an ORM and retrieve all the data I needed for the frontend. This allowed me to ship fullstack features quickly and felt empowering.
 
-However, circling back to the "I didn't know what I didn't know" problem, with no guidelines and few examples of robust, production-ready endpoints, I was unaware of the anatomy of a truly great API endpoint.
+However, circling back to the "I didn't know what I didn't know" problem, with no guidelines and few examples of robust, production-ready endpoints, I was unaware of the anatomy of a robust API endpoint.
 
 Looking back, I was completely unaware of:
 
@@ -460,7 +453,7 @@ Looking back, I was completely unaware of:
 Here's how this played out in practice:
 
 ```typescript
-// 🚩 My early tRPC endpoint (simplified)
+// 🚩 My early tRPC endpoints (simplified)
 export const teacherRouter = createTRPCRouter({
   getTeacherProfile: publicProcedure
     .input(z.object({ teacherId: z.string() }))
@@ -740,52 +733,7 @@ If I could go back, here's the approach I would've advocated for:
 
 One particularly enlightening story comes from PostHog itself. Their founder [James Hawkins shared](https://youtu.be/NAMsSkqqWpg?t=392) that one of their most important features—session recordings—only exists because an engineer insisted on building it, despite leadership skepticism. The data showed overwhelming user engagement, completely changing the company's perspective.
 
-**Implementation Would've Been Simple**
-
-Setting this up wouldn't have required much effort. Here's how a simple tracking wrapper could have looked:
-
-```typescript
-// Simple tracking wrapper
-export function trackEvent(event: string, properties?: Record<string, any>) {
-  try {
-    posthog.capture(event, {
-      ...properties,
-      env: process.env.NODE_ENV,
-    })
-  } catch (e) {
-    console.error('Event tracking failed:', e)
-  }
-}
-```
-
-And its usage in components would have been straightforward:
-
-```jsx
-function ReferralButton() {
-  return (
-    <button
-      onClick={() => {
-        openReferralModal()
-        trackEvent('referral_button_clicked')
-      }}
-    >
-      Invite Friends
-    </button>
-  )
-}
-```
-
-**A Candid Reflection**
-
-I'm writing this with a heavy heart—Til shut down last week. We built something users loved, but not enough of them to sustain the business. Would better metrics have saved us? Perhaps not. But they might have helped us focus our limited resources on the features that truly moved the needle.
-
-Looking at other successful marketplaces, the pattern is clear: they ruthlessly track and optimize core metrics like conversion rate, retention, and user satisfaction. They don't just ship features—they ship instrumented experiments that either prove their worth or get improved/removed.
-
-**The Takeaway**
-
-I now believe that uninstrumented features are just expensive guesses. Data doesn't guarantee success, but it gives you a fighting chance to learn and adapt. In my next role, I'll be advocating from day one for a culture where we don't just celebrate shipping—we celebrate learning from what we've shipped.
-
-The most elegant code in the world doesn't matter if users don't engage with it. And without metrics, you'll never really know if they do.
+**Lesson**: Let data guide the way. In the rush to ship features, we often forget that metrics are our compass for true product success. When we define what success looks like before building, instrument key actions during development, and actually follow up on usage patterns after launch, we create a feedback loop that makes every subsequent decision smarter. **The best teams don't just build fast—they learn fast by measuring what matters**.
 
 ---
 
@@ -797,7 +745,7 @@ The biggest mistake wasn't any single technical decision – it was **failing to
 
 In the startup world, you're constantly searching for your external growth engine – that magical combination of features, pricing, and market positioning that unlocks sustainable growth. You face countless challenges you can't control: market timing, competitive pressures, funding environments, and macroeconomic factors.
 
-But there's one critical engine that's entirely within your control: your team's ability to learn and improve. This internal growth engine compounds over time, making each feature better, each engineer more effective, and each pivot less painful.
+But there's **one critical engine that's entirely within your control: your team's ability to learn and improve**. This internal growth engine compounds over time, making each feature better, each engineer more effective, and each pivot less painful.
 
 ### The patterns were everywhere:
 
@@ -821,7 +769,7 @@ If I could go back and change one thing, it wouldn't be a technical decision. It
 - Creating simple templates for architectural decisions
 - Establishing core patterns for common engineering challenges
 - Building instrumentation into our definition of "done"
-- Scheduling regular reviews of what we've learned from shipped features
+- Scheduling occasional reviews of what we've learned from shipped features
 
 I don't pretend to know what makes every startup successful. But I do know that our ability to learn from our mistakes was more limited than it needed to be.
 
