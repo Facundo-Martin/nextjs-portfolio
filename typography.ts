@@ -108,6 +108,22 @@ export default {
             marginTop: 0,
           },
 
+          'h1, h2, h3, h4, h5, h6': {
+            position: 'relative',
+            scrollMarginTop: theme('spacing.16'),
+          },
+
+          // Rehype autolink heading styles
+          '.heading-anchor': {
+            color: 'inherit !important', // Force inherit color from heading
+            textDecoration: 'none !important', // Force no underline
+
+            '&:hover': {
+              color: 'var(--tw-prose-links) !important', // Only change color on hover
+              textDecoration: 'none !important', // Still no underline on hover
+            },
+          },
+
           // Images
           img: {
             borderRadius: theme('borderRadius.3xl'),
@@ -180,7 +196,7 @@ export default {
           li: {
             marginTop: theme('spacing.2'),
             marginBottom: theme('spacing.2'),
-            paddingLeft: theme('spacing[1 .5]'),
+            paddingLeft: theme('spacing.1'),
           },
           'li::marker': {
             fontSize: theme('fontSize.sm')[0],
