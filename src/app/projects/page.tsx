@@ -81,7 +81,7 @@ export default async function Projects() {
               <Image
                 src={project.logo}
                 alt=""
-                className="h-8 w-8"
+                className="h-8 w-8 rounded-full"
                 unoptimized
               />
             </div>
